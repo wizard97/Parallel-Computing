@@ -4,6 +4,6 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-void matrixMul(uint32_t n, float *dev_A, float *dev_B, float *dev_C, uint32_t block_dim);
+void matrixMul(uint32_t n, float *A, float *B, float *C, uint32_t block_dim);
 
 #endif

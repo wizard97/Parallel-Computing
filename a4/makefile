@@ -9,7 +9,7 @@
 CC = nvcc
 
 # define any compile-time flags
-CFLAGS = 
+CFLAGS =
 
 # define any directories containing header files other than /usr/include
 #
@@ -23,7 +23,7 @@ LFLAGS =
 # define any libraries to link into executable:
 #   if I want to link in libraries (libx.so or libx.a) I use the -llibname
 #   option, something like (this will link in libmylib.so and libm.so:
-LIBS = -lmylib -lm
+LIBS =
 
 # define the C source files
 SRCS = a4.c
@@ -37,7 +37,7 @@ SRCS_CUDA = p1_mult.cu
 # Below we are replacing the suffix .c of all words in the macro SRCS
 # with the .o suffix
 #
-OBJS = $(SRCS:.c=.o)
+OBJS = $(SRCS:.cu=.o)
 
 # define the executable file
 MAIN = a4
@@ -60,8 +60,8 @@ $(MAIN): $(OBJS)
 # it uses automatic variables $<: the name of the prerequisite of
 # the rule(a .c file) and $@: the name of the target of the rule (a .o file)
 # (see the gnu make manual section about automatic variables)
-.c.o:
-		$(CC) $(CFLAGS) $(INCLUDES) -c $<  -o $@
+.cu.o:
+		$(CC) $(CFLAGS) $(INCLUDES) -cu $<  -o $@
 
 clean:
 		$(RM) *.o *~ $(MAIN)

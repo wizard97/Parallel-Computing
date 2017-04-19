@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include "matrix_multiply.h"
 
 // Note N must be an even multiple of BLOCK_DIM
@@ -41,30 +42,12 @@ int main()
     printf("\n\nB: \n");
     PRINT_MATRIX(N, N, (float*)B, false);
 
-    // copy A
-    cudaMalloc(&dev_A, sizeof(float[N][N]));
-    cudaMemcpy(dev_A, A, sizeof(float[N][N]), cudaMemcpyHostToDevice);
 
-    // Copy B
-    cudaMalloc(&dev_B, sizeof(float[N][N]));
-    cudaMemcpy(dev_B, (float*)B, sizeof(float[N][N]), cudaMemcpyHostToDevice);
-
-    // Allocate space for C
-    cudaMalloc(&dev_C, sizeof(float[N][N]));
-
-    //dim3 Block(BLOCK_DIM, BLOCK_DIM);
-    //dim3 Grid(N/Block.x, N/Block.y);
-    matrixMul(N, dev_A, dev_B, dev_C, block_dim);
-    cudaMemcpy(C, dev_C, sizeof(float[N][N]), cudaMemcpyDeviceToHost);
+    matrixMul(N, (float*)A, (float*)B, (float*)C, BLOCK_DIM);
 
     printf("\nResult:\n");
     PRINT_MATRIX(N, N, (float*)C, false);
 
-
-    // Clean up memory
-    cudaFree(dev_A);
-    cudaFree(dev_B);
-    cudaFree(dev_C);
 
     free(A);
     free(B);
