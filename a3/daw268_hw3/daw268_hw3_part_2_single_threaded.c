@@ -1,0 +1,269 @@
+//This is a single threaded implimentation (no MPI) for part 2, it was used to compare the
+// the parallelized MPI implimentation runtime against
+
+//Compiling:
+//gcc daw268_hw3_part_2_single_threaded.c -O3 -std=gnu99 -o p2_st -lm
+
+//Running:
+// ./p2_st
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <time.h>
+#include <unistd.h>
+#include <math.h>
+#include <float.h>
+#include <assert.h>
+
+#define N 1536
+#define M 1536
+#define SRAND_VAL 97
+#define MAX_NUM_SWEEPS 30
+
+
+#define BILLION 1E9
+#define SIGN(X) (-1 + (2*(X >= 0)))
+
+struct timespec diff(struct timespec start, struct timespec end);
+void print_matrix(uint64_t m, uint64_t n, double data[m][n], bool matlab);
+void fill_crap(uint64_t m, uint64_t n, double data[m][n]);
+void calc_ata(uint64_t m, uint64_t n, double data[m][n], double res[n][n]);
+void matrix_mult(uint64_t m1, uint64_t n1, uint64_t n2,  const double A[m1][n1], const double B[n1][n2], double res[m1][n2]);
+void transpose(uint64_t m, uint64_t n, const double A[m][n], double res[n][m]);
+uint32_t jacobi(const uint32_t m, const uint32_t n, double A[m][n], double V[n][n]);
+bool jacobi_row(const uint32_t col_len_A, const uint32_t col_len_V, const uint32_t r1,
+		const uint32_t r2, double A_j[col_len_A][r1], double A_k[col_len_A][r2],
+        double V_j[col_len_V][r1], double V_k[col_len_V][r2], double *on, double *off);
+
+int main(int argc, char **argv)
+{
+  srand(SRAND_VAL);
+  double (*A)[N] = (double (*)[N]) malloc(sizeof(double[M][N])); // MxN
+  double (*V)[N] = (double (*)[N]) malloc(sizeof(double[N][N])); // NxN
+  double (*S) = (double (*)) malloc(sizeof(double[N])); // 1d array of singular values
+
+  // eye(n)
+  for (uint32_t i=0; i < N; i++) {
+    for (uint32_t j=0; j < N; j++)
+      V[i][j] = 0;
+    V[i][i] = 1;
+  }
+
+  fill_crap(M, N, A);
+  
+  struct timespec start, end;
+  clock_gettime(CLOCK_THREAD_CPUTIME_ID, &start);
+  
+  //print_matrix(M, N, A, true);
+  uint32_t n = jacobi(M, N, A, V);
+  //print_matrix(M, N, A, true);
+  printf("\n\nV:\n");
+  //print_matrix(N, N, V, true);
+  clock_gettime(CLOCK_THREAD_CPUTIME_ID, &end);
+
+  struct timespec rt = diff(start, end);
+  double rt_f = rt.tv_sec + ((double)rt.tv_nsec)/BILLION;
+  //uint64_t rt =  BILLION * (end.tv_sec - start.tv_sec) + end.tv_nsec - start.tv_nsec;
+  //double rt_f = ((double)rt)/BILLION;
+
+  printf("Completed in: %u sweeps, %f secs\n", n, rt_f);
+
+  for (uint32_t i=0; i < N; i++) {
+    // get norm
+    double norm =0;
+    for (uint32_t j=0; j < M; j++)
+      norm += A[j][i]*A[j][i];
+
+    S[i] = sqrt(norm); //square root of squares
+
+    //for (uint32_t j=0; j < M; j++) //normalize column vecs
+    //    A[j][i] /= S[i];
+
+  }
+
+  // Now first max(m-n) cols of A are the first cols in U
+
+  // Now A = A*S*V'
+
+
+  double (*res)[N] = (double (*)[N]) malloc(sizeof(double[M][N])); // NxN, A*S*V'
+  double (*Vt)[N] = (double (*)[N]) malloc(sizeof(double[N][N])); // NxN, V'
+
+  //transpose(N, N, V, Vt);
+  //matrix_mult(M, N, N, A, Vt, res);
+
+  printf("\nA?:\n");
+  //print_matrix(M, N, res, false);
+  free(res);
+  free(Vt);
+
+
+  free(A);
+  free(V);
+
+}
+
+
+
+
+
+void fill_crap(uint64_t m, uint64_t n, double data[m][n])
+{
+  for (uint64_t i=0; i<m; i++) {
+
+    for (uint64_t j=0; j < n; j++) {
+      data[i][j] = ((double)rand())/((double)RAND_MAX);
+    }
+
+  }
+
+}
+
+
+
+uint32_t jacobi(const uint32_t m, const uint32_t n, double A[m][n], double V[n][n])
+{
+  // Terminating conditon sqrt(off) < DBL_EPSILON*N*sqrt(on)
+  uint32_t num;
+  double on, off;
+  double on_total=0, off_total=INFINITY;
+  for (num=0; num < MAX_NUM_SWEEPS && sqrt(off_total) > DBL_EPSILON*n*sqrt(on_total); num++) {
+      on_total = 0;
+      off_total = 0;
+    for (uint32_t j=0; j < n; j++) {
+      for (uint32_t k=j+1; k < n; k++) {
+	     jacobi_row(M, N, N, N, (double (*)[n])&A[0][j], (double (*)[n])&A[0][k],
+			  (double (*)[n])&V[0][j], (double (*)[n])&V[0][k], &on, &off);
+         on_total += on; //ad the on diagnol
+      }
+      off_total += off; // only need A_jj on the last iteration
+    }
+  } //endsweep
+
+  return num;
+}
+
+
+
+
+// perform one jacobi rotation on cols A_j and A_k
+bool jacobi_row(const uint32_t col_len_A, const uint32_t col_len_V, const uint32_t r1, const uint32_t r2,
+		double A_j[col_len_A][r1], double A_k[col_len_A][r2], double V_j[col_len_V][r1], double V_k[col_len_V][r2],
+        double *on, double *off)
+{
+  //simple check
+  assert(A_j != A_k);
+  assert(V_j != V_k);
+
+
+  double a_jj = 0;
+  double a_jk = 0;
+  double a_kk = 0;
+
+  // calc dot products
+  for (uint32_t i=0; i < col_len_A; i++) {
+    a_jj += A_j[i][0]*A_j[i][0]; // col a_j dot a_j
+    a_jk += A_j[i][0]*A_k[i][0]; // col a_j dot a_k
+    a_kk += A_k[i][0]*A_k[i][0]; // col a_k dot a_k
+  }
+
+  *off = 2*(a_jk*a_jk); // add the off diagnol
+  *on = a_jj*a_jj;
+
+  double tau = (a_kk-a_jj)/(2*a_jk);
+  double t = 1/(tau + SIGN(tau)*sqrt(1+tau*tau));
+  double c = 1/sqrt(1+t*t); //cos
+  double s = c*t; //sin
+
+  //update A
+  for (uint32_t i=0; i < col_len_A; i++) {
+    //save ith row of A, cols j and k
+    double a_jk[2] = {A_j[i][0], A_k[i][0] };
+    A_j[i][0] = a_jk[0]*c - a_jk[1]*s;
+    A_k[i][0] = a_jk[0]*s + a_jk[1]*c;
+  }
+  //update V
+  for (uint32_t i=0; i < col_len_V; i++) {
+    //save ith row of V, cols j and k
+    double v_jk[2] = {V_j[i][0], V_k[i][0] };
+    V_j[i][0] = v_jk[0]*c - v_jk[1]*s;
+    V_k[i][0] = v_jk[0]*s + v_jk[1]*c;
+  }
+
+  return (sqrt(*off) <= DBL_EPSILON*sqrt(*on));
+
+}
+
+
+void print_matrix(uint64_t m, uint64_t n, double data[m][n], bool matlab)
+{
+  if (matlab)
+    printf("[ ");
+  for (uint64_t i=0; i< m; i++) {
+
+    for (uint64_t j=0; j < n-1; j++) {
+      printf("%.4f, ", data[i][j]);
+    }
+    printf(matlab ? "%.4f; " : "%.4f\n", data[i][n-1]);
+  }
+
+  if (matlab)
+    printf("]\n");
+}
+
+
+
+void calc_ata(uint64_t m, uint64_t n, double data[m][n], double res[n][n])
+{
+
+  for(uint32_t i=0; i<n; i++) {
+    for (uint32_t j=0; j<n; j++) {
+      res[i][j] = 0;
+      for (uint32_t k=0; k< m; k++) {
+	res[i][j] += data[k][i]*data[k][j];
+      }
+    }
+  }
+}
+
+
+void matrix_mult(uint64_t m1, uint64_t n1, uint64_t n2,  const double A[m1][n1], const double B[n1][n2], double res[m1][n2])
+{
+
+  for(uint32_t i=0; i<m1; i++) {
+    for (uint32_t j=0; j<n2; j++) {
+      res[i][j] = 0;
+      for (uint32_t k=0; k< n1; k++) {
+	res[i][j] += A[i][k]*B[k][j];
+      }
+    }
+  }
+}
+
+
+
+void transpose(uint64_t m, uint64_t n, const double A[m][n], double res[n][m])
+{
+
+  for(uint32_t i=0; i<m; i++) {
+    for (uint32_t j=0; j<n; j++) {
+      res[j][i] = A[i][j];
+    }
+  }
+}
+
+
+struct timespec diff(struct timespec start, struct timespec end)
+{
+	struct timespec temp;
+	if ((end.tv_nsec-start.tv_nsec)<0) {
+		temp.tv_sec = end.tv_sec-start.tv_sec-1;
+		temp.tv_nsec = 1000000000+end.tv_nsec-start.tv_nsec;
+	} else {
+		temp.tv_sec = end.tv_sec-start.tv_sec;
+		temp.tv_nsec = end.tv_nsec-start.tv_nsec;
+	}
+	return temp;
+}

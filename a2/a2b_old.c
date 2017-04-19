@@ -1,0 +1,290 @@
+// Compile with 
+// gcc a2.c -o p2 -fopenmp -O3 -std=gnu99 -Wall -lrt
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <math.h>
+#include <time.h>
+#include <omp.h>
+
+//params
+#define N (5)
+
+#define NUM_THREADS 2
+#define NUM_RUNS 4
+#define MSORT_BASE_CASE_ISORT 18
+
+
+#define SRAND_VAL 8
+#define BILLION 1000000000L
+
+#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
+
+
+void fill_crap(uint64_t dim, float data[dim][dim]);
+void print_matrix(uint64_t dim, float data[dim][dim]);
+void print_addr_matrix(const uint64_t dim, float (**rows)[dim]);
+
+
+void perm_2_mt(const uint32_t dim, float (**rows)[dim]);
+    
+void r_merge_sort_mt(const uint32_t dim, float (**rows)[dim], const uint32_t col, const uint32_t l, 
+		  const uint32_t h);
+
+void r_insert_sort(const uint32_t dim, float (**rows)[dim], const uint32_t col, const uint32_t l, const uint32_t h);
+
+void r_merge(const uint32_t dim, float (**rows)[dim], const uint32_t col, const uint32_t l, 
+	     const uint32_t m, const uint32_t h);
+
+void r_merge_mt(const uint32_t dim, float (**rows)[dim], float (**a)[dim], float (**b)[dim], const uint32_t col,
+		const uint32_t l,  uint32_t la,  uint32_t lb);
+    
+uint32_t r_binary_search(const uint32_t dim, float (**rows)[dim], const uint32_t col,
+			 const uint32_t l, const uint32_t h, const float val);
+    
+int main(int argc, char **argv)
+{
+    //pointer to array of N floats
+    //data[0] = float* to first row
+    float (*data)[N] = malloc(sizeof(float)*N*N);
+    // pointer to an array of N pointers that point to N floats
+    // rows[0] = (float *)[N], address of first first row
+    float (**rows)[N] = malloc(sizeof(float (*)[N])*N);
+
+    if(!data || !rows) {
+	printf("malloc() failed\n");
+	exit(1);
+    }
+
+    //faster to work with pointers to rows than actual rows
+    for (uint32_t i=0; i< N; i++) {
+	rows[i] = &data[i];
+    }
+
+    //omp_set_dynamic(1);
+    omp_set_num_threads(NUM_THREADS);
+	
+	
+    
+    srand(SRAND_VAL);
+    
+    fill_crap(N, data);
+    print_addr_matrix(N, rows);
+    printf("Starting\n");
+    
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    perm_2_mt(N, rows);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    uint64_t t = BILLION * (end.tv_sec - start.tv_sec) + end.tv_nsec - start.tv_nsec;
+
+    printf("Completed in %f secs\n", ((float)t)/BILLION);
+    print_addr_matrix(N, rows);
+    
+
+    free(data);
+    free(rows);
+
+    return 0;
+}
+
+
+void perm_2_mt(const uint32_t dim, float (**rows)[dim])
+{
+    for (uint32_t i=0; i< dim; i++) {
+
+	//r_merge_sort_mt(dim, rows, i, i, dim);
+	r_insert_sort(dim, rows, i, i, dim);
+    }
+
+}
+
+
+void r_merge(const uint32_t dim, float (**rows)[dim], const uint32_t col, const uint32_t l, const uint32_t m, const uint32_t h)
+{
+    float (**p1)[dim] = malloc(sizeof(rows)*(h-l));
+    
+    if (!p1) 
+	exit(-1);
+
+    memcpy(p1, &rows[l], sizeof(rows)*(h-l));
+
+    const uint32_t n1 = m - l, n2 = h - m;
+    float (**p2)[dim] = p1 + n1;
+
+    uint32_t i=0, j=0, x=l;
+    while (i < n1 && j < n2) {
+	
+	if ((*p1[i])[col] < (*p2[j])[col]) {
+	    rows[x] = p1[i++];
+	} else {
+	    rows[x] = p2[j++];
+	}
+	x++;
+    }
+
+    
+    // copy the remainder
+    while (i < n1) {
+	rows[x++] = p1[i++];
+    }
+
+    while (j < n2) {
+	rows[x++] = p2[j++];
+    }
+
+    free(p1);
+
+}
+
+
+void r_merge_mt(const uint32_t dim, float (**rows)[dim], float (**a)[dim], float (**b)[dim], const uint32_t col,
+		const uint32_t l,  uint32_t la,  uint32_t lb)
+{
+
+    //base case
+    if (!la || !lb)
+	return; 
+    
+    // a and la  must be largest
+    if (lb > la) {
+	uint32_t swp = la;
+	la = lb;
+	lb = swp;
+	
+        float (**pswp)[dim] = a;
+	a = b;
+	b = pswp;
+    } 
+
+    //r is incluseive in p1
+    uint32_t r = la/2;
+
+    //binary search a[r] in p2
+    uint32_t s = r_binary_search(dim, b, col, 0, lb, (*a[r])[col]);
+    uint32_t offset = l + (r) + s; //offset
+
+    rows[l + offset] = a[r];
+
+    r_merge_mt(dim, rows, a, b, col, l, r, s);
+    r_merge_mt(dim, rows, a + r + 1, b+s, col, l+(offset+1) ,la-(offset+1), lb - s);
+    
+
+}
+
+
+uint32_t r_binary_search(const uint32_t dim, float (**rows)[dim], const uint32_t col,
+			 const uint32_t l, const uint32_t h, const float val)
+{
+    uint32_t n = h-l;
+    uint32_t m = l + (n+1)/2;
+    
+    if (n < 2) {
+	return l;
+    }
+
+
+    if ((*rows[m-1])[col] <= val) {
+	return r_binary_search(dim, rows, col, l, m, val);
+    } else {
+	return r_binary_search(dim, rows, col, m, h, val);
+    }
+}
+
+
+void r_merge_sort_mt(const uint32_t dim, float (**rows)[dim], const uint32_t col, const uint32_t l, const uint32_t h)
+{
+    uint32_t n = h-l;
+
+    //base case
+    if (n <= MSORT_BASE_CASE_ISORT) {
+	r_insert_sort(dim, rows, col, l, h);
+	return;
+    }
+
+    uint32_t m = l + n/2;
+    
+    #pragma omp parallel sections
+    {
+        #pragma omp section
+	r_merge_sort_mt(dim, rows, col, l, m);
+
+        #pragma omp section
+	r_merge_sort_mt(dim, rows, col, m, h);
+    }
+    
+    //r_merge(dim, rows, col, l, m, h);
+    float (**p1)[dim] = malloc(n*sizeof(rows));
+    float (**p2)[dim] = p1 + m;
+    
+    if (!p1)
+	exit(1);
+
+    memcpy(p1, rows, sizeof(rows)*n);
+    
+    r_merge_mt(dim, rows, p1, p2, col, l, m, n-m);
+
+    free(p1);
+    
+}
+
+
+
+void r_insert_sort(const uint32_t dim, float (**rows)[dim], const uint32_t col, const uint32_t l, const uint32_t h)
+{
+    
+    for (uint32_t i = l+1; i < h; i++) {
+      
+      uint32_t j = i;
+      while (j > l && (*rows[j])[col] < (*rows[j-1])[col]) {
+	//Swapping
+	float (*tmp)[dim] = rows[j];
+	rows[j] = rows[j-1];
+	rows[j-1] = tmp;
+	
+	j--;
+      }
+
+    } 
+}
+
+
+
+
+
+void fill_crap(uint64_t dim, float data[dim][dim])
+{   
+    for (uint64_t i=0; i<dim; i++) {
+
+	for (uint64_t j=0; j < dim; j++) {
+	    data[i][j] = ((float)rand())/RAND_MAX;
+	}
+
+     }
+
+}
+
+
+void print_matrix(uint64_t dim, float data[dim][dim])
+{
+    for (uint64_t i=0; i<dim; i++) {
+
+        for (uint64_t j=0; j < dim-1; j++) {
+            printf("%.4f, ", data[i][j]);
+        }
+        printf("%.4f\n", data[i][dim-1]);
+    }
+}
+
+
+void print_addr_matrix(const uint64_t dim, float (**rows)[dim])
+{
+    for (uint64_t i=0; i<dim; i++) {
+
+        for (uint64_t j=0; j < dim-1; j++) {
+            printf("%.4f, ", (*rows[i])[j]);
+        }
+        printf("%.4f\n", (*rows[i])[dim-1]);
+    }
+}

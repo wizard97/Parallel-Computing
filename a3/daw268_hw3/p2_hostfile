@@ -1,0 +1,9 @@
+en-openmpi00 slots=32 max-slots=32
+#en-openmpi01 slots=16 max-slots=16
+en-openmpi02 slots=16 max-slots=16
+en-openmpi03 slots=16 max-slots=16
+en-openmpi04 slots=16 max-slots=16
+en-openmpi05 slots=16 max-slots=16
+en-openmpi06 slots=16 max-slots=16
+en-openmpi07 slots=16 max-slots=16
+

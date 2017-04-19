@@ -1,0 +1,278 @@
+// Same socket 16 procs: mpirun -mca plm_rsh_no_tree_spawn 1 --map-by ppr:16:socket -bind-to core -np 16 ./p1
+// Between sockets 16 procs: mpirun -mca plm_rsh_no_tree_spawn 1 --map-by socket -bind-to core -np 16 ./p1
+// Between nodes 16 procs: mpirun -mca plm_rsh_no_tree_spawn 1 --map-by node -bind-to core -np 16 -host en-openmpi00,en-openmpi02 ./p1
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <mpi.h>
+#include <time.h>
+#include <unistd.h>
+#include <math.h>
+#include <float.h>
+#include <string.h>
+
+#define MAX_NUM_SWEEPS 50
+#define NUM_RUNS (1<<18)
+//max msg length in bytes
+#define MAX_MSG_LEN (1<<20)
+#define SEED_RAND 97
+
+#define N 960
+#define M 1024
+#define NUM_PROCS 4
+#define MAX_COLS (NORMAL_COLS + NON_DIV_COLS) //max cols in a packet
+#define NORMAL_COLS (N/(2*NUM_PROCS))
+#define NON_DIV_COLS N%NUM_PROCS
+
+
+#define DEBUG(S, ...) printf("DEBUG (rank %d of %d): " S "\n", myrank, nproc, ##__VA_ARGS__)
+// Only the rank 0 process debugs
+#define DEBUGR0(S, ...) if(ROOT()) DEBUG(S, ##__VA_ARGS__)
+
+// The root node has cord 0
+#define ROOT() !cord
+#define SIGN(X) (-1 + (2*(X >= 0)))
+
+void init_MPI(int argc, char **argv);
+void jacobi(const uint32_t m, const uint32_t n, double A[m][n], double V[n][n]);
+void fill_crap(uint64_t m, uint64_t n, double data[m][n]);
+void copy_cols(const uint32_t m, const uint32_t n, uint32_t startcol, uint32_t numcols, double A[m][n], double dest[m][numcols]);
+
+typedef enum mpi_tag
+{
+    TAG_MSG = 0,
+    TAG_RUNTIME,
+} mpi_tag_t;
+
+static int myrank, nproc;
+static MPI_Comm comm_cart;
+static int cord;
+
+int           blocklengths[3] = {M*MAX_COLS, N*MAX_COLS, 2};
+MPI_Datatype types[3] = {MPI_DOUBLE, MPI_DOUBLE, MPI_UNSIGNED};
+MPI_Datatype mpi_colblock_type;
+
+
+typedef struct ColBlock
+{
+    double A_s[M][MAX_COLS];
+    double V_s[N][MAX_COLS];
+    unsigned int ncols;
+    unsigned int block_id;
+} colblock_t;
+
+int main(int argc, char **argv)
+{
+    srand(SEED_RAND);
+    init_MPI(argc, argv);
+
+    int name_len;
+    char processor_name[MPI_MAX_PROCESSOR_NAME];
+    MPI_Get_processor_name(processor_name, &name_len);
+    DEBUG("Hello, my names is %s\n", processor_name);
+
+    double (*A)[N] = (double (*)[N]) malloc(sizeof(double[M][N])); // MxN
+    double (*V)[N] = (double (*)[N]) malloc(sizeof(double[N][N])); // NxN
+    double (*S) = (double (*)) malloc(sizeof(double[N])); // 1d array of singular values
+
+    // eye(n)
+    for (uint32_t i=0; i < N; i++) {	
+        for (uint32_t j=0; j < N; j++) 
+	    V[i][j] = 0;	
+	V[i][i] = 1;
+    }
+
+    fill_crap(M, N, A);   
+
+    
+    colblock_t myblocks[2];
+    
+    if (ROOT()) {
+        copy_cols(M, N, 0, MAX_COLS, A, myblocks[0].A_s);
+	copy_cols(N, N, 0, MAX_COLS, V, myblocks[0].V_s);
+
+	myblocks[0].ncols = MAX_COLS;
+	myblocks[0].block_id = 0;
+    } else {
+	copy_cols(M, N, (2*NORMAL_COLS)*cord + NON_DIV_COLS, NORMAL_COLS, A, myblocks[0].A_s);
+	copy_cols(N, N, (2*NORMAL_COLS)*cord + NON_DIV_COLS, NORMAL_COLS, V, myblocks[0].V_s);
+	
+	myblocks[0].ncols = NORMAL_COLS;
+	myblocks[0].block_id = 2*cord;
+    }
+
+    	copy_cols(M, N, (2*NORMAL_COLS)*cord + NORMAL_COLS + NON_DIV_COLS, NORMAL_COLS, A, myblocks[1].A_s);
+	copy_cols(N, N, (2*NORMAL_COLS)*cord + NORMAL_COLS + NON_DIV_COLS, NORMAL_COLS, V, myblocks[1].V_s);
+	
+	myblocks[1].ncols = NORMAL_COLS;
+	myblocks[1].block_id = 2*cord + 1;
+
+
+
+    MPI_Finalize();
+}
+
+
+
+void copy_cols(const uint32_t m, const uint32_t n, uint32_t startcol, uint32_t numcols, double A[m][n], double dest[m][numcols])
+{
+    for (uint32_t i=0; i < m ; i++) { // rows
+	for (uint32_t j=0; j < numcols; j++) {
+	    dest[i][j] = A[i][startcol+j];
+	}
+    }
+}
+
+
+void jacobi_blocks(colblock_t b1, colblock_t b2)
+{
+    double off =  INFINITY; //positive infinity
+    double on = 0;
+    // Terminating conditon sqrt(off) < DBL_EPSILON*N*sqrt(on)
+
+
+	off = 0;
+	on = 0;
+	for (uint32_t j=0; j < n; j++) {
+	    for (uint32_t k=j+1; k < n; k++) {
+
+		double a_jj = 0;
+		double a_jk = 0;
+		double a_kk = 0;
+
+		// calc dot products
+		for (uint32_t i=0; i < m; i++) {
+		    a_jj += A[i][j]*A[i][j]; // col a_j dot a_j
+		    a_jk += A[i][j]*A[i][k]; // col a_j dot a_k
+		    a_kk += A[i][k]*A[i][k]; // col a_k dot a_k
+		}
+		off += 2*(a_jk*a_jk); // add the off diagnol
+		on += (k == n-1) ? (a_jj*a_jj) : 0; //add the on diagnol
+		double tau = (a_kk-a_jj)/(2*a_jk);
+		double t = 1/(tau + SIGN(tau)*sqrt(1+tau*tau));
+	        double c = 1/sqrt(1+t*t); //cos
+		double s = c*t; //sin
+		
+		//update A
+		for (uint32_t i=0; i < m; i++) {
+		    //save ith row of A, cols j and k
+		    double a_jk[2] = {A[i][j], A[i][k] };
+		   A[i][j] = a_jk[0]*c - a_jk[1]*s;
+		   A[i][k] = a_jk[0]*s + a_jk[1]*c;   
+		}
+		//update V
+	        for (uint32_t i=0; i < n; i++) {
+		    //save ith row of V, cols j and k
+		    double v_jk[2] = {V[i][j], V[i][k] };
+		   V[i][j] = v_jk[0]*c - v_jk[1]*s;
+		   V[i][k] = v_jk[0]*s + v_jk[1]*c;   
+		}
+		
+	    }
+	}
+
+}
+
+
+
+void jacobi(const uint32_t m, const uint32_t n, double A[m][n], double V[n][n])
+{
+    double off =  INFINITY; //positive infinity
+    double on = 0;
+    // Terminating conditon sqrt(off) < DBL_EPSILON*N*sqrt(on)
+
+    uint32_t num;
+    for (num=0; num < MAX_NUM_SWEEPS && (sqrt(off) > DBL_EPSILON*n*sqrt(on)); num++) {
+	off = 0;
+	on = 0;
+	for (uint32_t j=0; j < n; j++) {
+	    for (uint32_t k=j+1; k < n; k++) {
+
+		double a_jj = 0;
+		double a_jk = 0;
+		double a_kk = 0;
+
+		// calc dot products
+		for (uint32_t i=0; i < m; i++) {
+		    a_jj += A[i][j]*A[i][j]; // col a_j dot a_j
+		    a_jk += A[i][j]*A[i][k]; // col a_j dot a_k
+		    a_kk += A[i][k]*A[i][k]; // col a_k dot a_k
+		}
+		off += 2*(a_jk*a_jk); // add the off diagnol
+		on += (k == n-1) ? (a_jj*a_jj) : 0; //add the on diagnol
+		double tau = (a_kk-a_jj)/(2*a_jk);
+		double t = 1/(tau + SIGN(tau)*sqrt(1+tau*tau));
+	        double c = 1/sqrt(1+t*t); //cos
+		double s = c*t; //sin
+		
+		//update A
+		for (uint32_t i=0; i < m; i++) {
+		    //save ith row of A, cols j and k
+		    double a_jk[2] = {A[i][j], A[i][k] };
+		   A[i][j] = a_jk[0]*c - a_jk[1]*s;
+		   A[i][k] = a_jk[0]*s + a_jk[1]*c;   
+		}
+		//update V
+	        for (uint32_t i=0; i < n; i++) {
+		    //save ith row of V, cols j and k
+		    double v_jk[2] = {V[i][j], V[i][k] };
+		   V[i][j] = v_jk[0]*c - v_jk[1]*s;
+		   V[i][k] = v_jk[0]*s + v_jk[1]*c;   
+		}
+		
+	    }
+	}
+    } //endsweep
+}
+
+
+
+void fill_crap(uint64_t m, uint64_t n, double data[m][n])
+{   
+    for (uint64_t i=0; i<m; i++) {
+
+	for (uint64_t j=0; j < n; j++) {
+	    data[i][j] = ((double)rand())/((double)RAND_MAX);
+	}
+
+    }
+
+}
+
+
+
+void init_MPI(int argc, char **argv)
+{
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
+    MPI_Comm_size(MPI_COMM_WORLD, &nproc);
+
+    int dim = NUM_PROCS;
+    int periodic = 0x01;
+    MPI_Cart_create(MPI_COMM_WORLD, 1, &dim, &periodic, true, &comm_cart);
+
+    if (comm_cart == MPI_COMM_NULL) {
+	DEBUG("Got NULL for MPI_Cart_create, exiting");
+	MPI_Finalize();
+	exit(1);
+    }
+
+    MPI_Comm_rank(comm_cart, &myrank);
+    MPI_Comm_size(comm_cart, &nproc);
+    MPI_Cart_coords(comm_cart, myrank, 1, &cord);
+
+    //init the new datatype
+    MPI_Aint     offsets[3];
+    colblock_t tmp;
+    MPI_Address(&tmp, &offsets[0]);
+    MPI_Address(&tmp.V_s, &offsets[1]);
+    MPI_Address(&tmp.ncols, &offsets[2]);
+    
+    offsets[1] = offsets[1] - offsets[0];
+    offsets[2] = offsets[2] - offsets[0];
+    offsets[0] = 0;
+
+    MPI_Type_struct(3, blocklengths, offsets, types, &mpi_colblock_type);
+    MPI_Type_commit(&mpi_colblock_type);
+}
