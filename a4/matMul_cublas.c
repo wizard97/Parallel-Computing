@@ -1,5 +1,5 @@
 #include "matMul.h"
-#include <cublas.h>
+//#include <cublas.h>
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 
@@ -23,7 +23,7 @@ void matMul_cublas(const uint32_t n, const float *A, const float *B, float *C)
         }
     }
 
-    cublasInit();
+    //cublasInit();
 
     cudaMalloc((void**)&dev_A, sizeof(float[n][n]));
     cudaMalloc((void**)&dev_B, sizeof(float[n][n]));
@@ -59,6 +59,6 @@ void matMul_cublas(const uint32_t n, const float *A, const float *B, float *C)
     free(b);
     free(c);
 
-    cublasShutdown();
+    //cublasShutdown();
 
 }
