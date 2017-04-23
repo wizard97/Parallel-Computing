@@ -1,72 +1,27 @@
-#
-# 'make depend' uses makedepend to automatically generate dependencies
-#               (dependencies are added to end of Makefile)
-# 'make'        build executable file 'mycc'
-# 'make clean'  removes all .o and executable files
-#
+objects = main.o naive_mult.o cpu_mult.o matMul_tiled.o matMul_tiled_transposed.o  matMul_cublas.o
+exec = a4
 
-# define the C compiler to use
-CC = nvcc
+ALL_INCLUDES = -I/usr/local/cuda-8.0/lib64/
+ALL_LIBS = -lcudart -fopenmp -lcublas
 
-# define any compile-time flags
-CFLAGS =
+C_INCLUDES = -I/usr/local/cuda-8.0/lib64/
+C_LIBS = -fopenmp -lcublas -lcudart
+# gcc -std=gnu99 -c -O3 -Wall a4.c -o main.o
+# nvcc p1_mult.cu -arch=sm_30 -dc
+# nvcc -arch=sm_30 -dlink main.o p1_mult.o -o gpuCode.o
+# g++ main.o p1_mult.o gpuCode.o -I/usr/local/cuda-8.0/lib64/ -lcudart -o a4
 
-# define any directories containing header files other than /usr/include
-#
-INCLUDES = -I.
+all: $(objects) gpuCode.o
+	g++ $(objects) gpuCode.o $(ALL_INCLUDES) $(ALL_LIBS) -o $(exec)
 
-# define library paths in addition to /usr/lib
-#   if I wanted to include libraries not in /usr/lib I'd specify
-#   their path using -Lpath, something like:
-LFLAGS =
+%.o: %.c
+	gcc -std=gnu99 -c -O3 -Wall $(C_INCLUDES) $(C_LIBS) $< -o $@
 
-# define any libraries to link into executable:
-#   if I want to link in libraries (libx.so or libx.a) I use the -llibname
-#   option, something like (this will link in libmylib.so and libm.so:
-LIBS =
+%.o: %.cu
+	nvcc -arch=sm_30 -O3 -dc -D_FORCE_INLINES $< -o $@
 
-# define the C source files
-SRCS = a4.c
-SRCS_CUDA = p1_mult.cu
-
-# define the C object files
-#
-# This uses Suffix Replacement within a macro:
-#   $(name:string1=string2)
-#         For each word in 'name' replace 'string1' with 'string2'
-# Below we are replacing the suffix .c of all words in the macro SRCS
-# with the .o suffix
-#
-OBJS = $(SRCS:.cu=.o)
-
-# define the executable file
-MAIN = a4
-
-#
-# The following part of the makefile is generic; it can be used to
-# build any executable just by changing the definitions above and by
-# deleting dependencies appended to the file from 'make depend'
-#
-
-.PHONY: depend clean
-
-all:    $(MAIN)
-		@echo  Simple compiler named mycc has been compiled
-
-$(MAIN): $(OBJS)
-		$(CC) $(CFLAGS) $(INCLUDES) -o $(MAIN) $(OBJS) $(LFLAGS) $(LIBS)
-
-# this is a suffix replacement rule for building .o's from .c's
-# it uses automatic variables $<: the name of the prerequisite of
-# the rule(a .c file) and $@: the name of the target of the rule (a .o file)
-# (see the gnu make manual section about automatic variables)
-.cu.o:
-		$(CC) $(CFLAGS) $(INCLUDES) -cu $<  -o $@
+gpuCode.o : $(objects)
+	nvcc -arch=sm_30 -O3 -dlink $^ -o $@
 
 clean:
-		$(RM) *.o *~ $(MAIN)
-
-depend: $(SRCS)
-		makedepend $(INCLUDES) $^
-
-# DO NOT DELETE THIS LINE -- make depend needs it
+	rm -f *.o $(exec)

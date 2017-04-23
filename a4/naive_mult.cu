@@ -1,6 +1,7 @@
-#include "matrix_multiply.h"
+#include "matMul.h"
 
-__global__ void matrixMulCuda(uint32_t n, float *dev_A, float *dev_B, float *dev_C)
+__global__ static void matrixMulCuda(const uint32_t n, const  float *dev_A, const float *dev_B,
+            float *dev_C)
 {
     float partial = 0.0;
     uint32_t i = blockIdx.y * blockDim.y + threadIdx.y; // Row i of C
@@ -13,7 +14,8 @@ __global__ void matrixMulCuda(uint32_t n, float *dev_A, float *dev_B, float *dev
 }
 
 
-void matrixMul(uint32_t n, float *A, float *B, float *C, uint32_t block_dim)
+void matMul_naive(const uint32_t n, const float *A, const float *B, float *C,
+            const uint32_t block_dim)
 {
     float *dev_A, *dev_B, *dev_C;
     // copy A
