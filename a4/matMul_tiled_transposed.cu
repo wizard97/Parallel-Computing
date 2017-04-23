@@ -7,7 +7,7 @@ __global__ static void matrixMulCuda(const uint32_t n, const float *dev_A, const
 
     // create A_tile and B_tile from shared memory s
     float *A_tile = (float *)s;
-    float *B_tile = A_tile + blockDim.x*blockDim.y;
+    float *B_tile = A_tile + (blockDim.x+1)*blockDim.y;
 
     float partial = 0.0;
 
@@ -26,20 +26,23 @@ __global__ static void matrixMulCuda(const uint32_t n, const float *dev_A, const
 
     for (uint16_t m = 0; m < numTiles; m++) {
         // loads will be coalesced since adjacents Idx.x is an adjacent load
-        // each thread load one element to tile
+        // each thread load one element to tile4096
         //A_tile[ty][tx] = dev_A[row][m*bdx + tx];
         A_tile[bdx*ty + tx] = dev_A[n*row + m*bdx + tx];
 
-        // transpose b,
+        // transpose b, add 1 to row len to stop bank conflicts
         //B_tile[tx][ty] = dev_B[m*bdy + ty][col];
-        B_tile[bdx*tx + ty] = dev_B[n*(m*bdy + ty) + col];
+        B_tile[(bdx+1)*tx + ty] = dev_B[n*(m*bdy + ty) + col];
+
+        //B_tile[ty][tx] = dev_B[row][m*bdx + tx];
+        //B_tile[bdx*ty + tx] = dev_B[n*row + m*bdx + tx];
 
         // wait for all threads to finish
         __syncthreads();
 
         // compute partial dot product
         for (uint16_t x = 0; x < bdx; x++)
-            partial += A_tile[bdx*ty + x] * B_tile[bdx*tx + x];
+            partial += A_tile[bdx*ty + x] * B_tile[(bdx+1)*tx + x];
 
         __syncthreads();
     }
@@ -67,7 +70,8 @@ void matMul_tiled_transposed(const uint32_t n, const float *A, const float *B,
     dim3 Block(block_dim, block_dim);
     dim3 Grid(n/Block.x, n/Block.y);
 
-    matrixMulCuda<<< Grid, Block, 2*sizeof(float[Block.y][Block.x])>>>(n, dev_A, dev_B, dev_C);
+    // padd with 1 for no bank conflict
+    matrixMulCuda<<< Grid, Block, 2*sizeof(float[Block.y][Block.x+1])>>>(n, dev_A, dev_B, dev_C);
 
     cudaMemcpy(C, dev_C, sizeof(float[n][n]), cudaMemcpyDeviceToHost);
 

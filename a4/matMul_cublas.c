@@ -42,18 +42,18 @@ void matMul_cublas(const uint32_t n, const float *A, const float *B, float *C)
     cublasGetMatrix(n, n, sizeof(float), dev_C, n, c, n);
 
 
-    cudaFree(dev_A);
-    cudaFree(dev_B);
-
-    cublasDestroy(handle);
-
     // copy back answer into C
     for (uint32_t j = 0; j < n; j++) {
         for (uint32_t i = 0; i < n; i++) {
             C[n*i + j] = c[IDX2C(i,j,n)];
         }
     }
+
+    cudaFree(dev_A);
+    cudaFree(dev_B);
     cudaFree(dev_C);
+
+    cublasDestroy(handle);
 
     free(a);
     free(b);

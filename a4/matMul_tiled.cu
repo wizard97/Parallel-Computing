@@ -27,18 +27,17 @@ __global__ static void matrixMulCuda(const uint32_t n, const float *dev_A, const
     for (uint16_t m = 0; m < numTiles; m++) {
         // Loads are coallesced
         //A_tile[ty][tx] = dev_A[row][m*bdx + tx];
-        A_tile[bdx*ty + tx] = dev_A[n*row + m*bdx + tx];
-
+        A_tile[bdx*ty + tx] = dev_A[n*row + m*bdx + tx]; //load coalesced
 
         //B_tile[ty][tx] = dev_B[m*bdy + ty][col];
-        B_tile[bdy*ty + tx] = dev_B[n*(m*bdy + ty) + col];
+        B_tile[bdy*ty + tx] = dev_B[n*(m*bdy + ty) + col]; //load coalesced
 
         // wait for all threads to finish
         __syncthreads();
 
         // compute partial dot product
         for (uint16_t x = 0; x < bdx; x++)
-            partial += A_tile[bdx*ty + x] * B_tile[bdy*x + tx];
+            partial += A_tile[bdx*ty + x] * B_tile[bdy*x + tx]; //no shared memory conflict
 
         __syncthreads();
     }
