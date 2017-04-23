@@ -10,6 +10,8 @@ C_LIBS = -fopenmp -lcublas -lcudart
 COMPUTE_VER ?= sm_52
 COMPUTE = -arch=$(COMPUTE_VER)
 
+NVCC= /usr/local/cuda-8.0/bin/nvcc
+
 #COMPUTE = -arch=sm_30
 # gcc -std=gnu99 -c -O3 -Wall a4.c -o main.o
 # nvcc p1_mult.cu -arch=sm_30 -dc
@@ -23,10 +25,10 @@ all: $(OBJECTS) gpuCode.o
 	gcc -std=gnu99 -c -O3 -Wall $(C_INCLUDES) $(C_LIBS) $< -o $@
 
 %.o: %.cu
-	nvcc $(COMPUTE) -O3 -dc -D_FORCE_INLINES $< -o $@
+	$(NVCC) $(COMPUTE) -O3 -dc -D_FORCE_INLINES $< -o $@
 
 gpuCode.o : $(OBJECTS)
-	nvcc $(COMPUTE) -O3 -dlink $^ -o $@
+	$(NVCC) $(COMPUTE) -O3 -dlink $^ -o $@
 
 clean:
 	rm -f *.o $(EXEC)
