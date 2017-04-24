@@ -1,5 +1,5 @@
-OBJECTS = main.o naive_mult.o cpu_mult.o matMul_tiled.o matMul_tiled_transposed.o  matMul_cublas.o
-EXEC = a4
+OBJECTS = daw268_hw4_1_to_4.o naive_mult.o cpu_mult.o matMul_tiled.o matMul_tiled_transposed.o  matMul_cublas.o
+EXEC = daw268_hw4_1_to_4
 
 ALL_INCLUDES = -L/usr/local/cuda-8.0/lib64/
 ALL_LIBS = -lcudart -fopenmp -lcublas

@@ -25,14 +25,14 @@
 // Note N must be an even multiple of BLOCK_DIM
 // test between N_START x N_START to N_ENDx N_END
 #define N_START BLOCK_DIM
-#define N_END 512*BLOCK_DIM
+#define N_END 256*BLOCK_DIM
 
 #define BLOCK_DIM 16 //cuda block dim BLOCK_DIM x BLOCK_DIMBLOCK_DIM
 #define NUM_RUNS 3 // number of averages for each matrix size
 #define RAND_SEED 97 //seed srand()
 
-#define ENABLE_CPU_MATMUL 0 //super slow, so only for small matrices, uses OMP
-#define CPU_NUM_THREADS 4 // For use in cpu matMul
+#define ENABLE_CPU_MATMUL 1 //super slow, so only for small matrices, uses OMP
+#define CPU_NUM_THREADS 16 // For use in cpu matMul
 
 // debugging/testing
 #define VALIDATE_IMPLIMENTATIONS 1 //tests all implimentations of matMul before benchmarking
@@ -56,7 +56,7 @@ void validate_matMul();
 bool floats_equal(float *a, float *b, const uint32_t num);
 uint64_t get_dt(struct timespec *start, struct timespec *end);
 
-int main()
+int main(int argc, char **argv)
 {
     struct timespec start, end;
     uint64_t rt;
@@ -64,7 +64,7 @@ int main()
     srand(RAND_SEED);
 
     char tmp[50];
-    sprintf(tmp, "a4_data_%u_%u.csv", N_START, N_END);
+    sprintf(tmp, "data/a4_data_%u_%u.csv", N_START, N_END);
     FILE *f = fopen(tmp, "w");
 
     fprintf(f, "N,Naive (ns),Tiled (ns),Transposed (ns),Cublas (ns),CPU %u Thds OMP (ns)\n", CPU_NUM_THREADS);
@@ -75,7 +75,7 @@ int main()
     #endif
 
     // sweep
-    for (uint32_t N= N_START; N < N_END; N <<= 1)
+    for (uint32_t N= N_START; N <= N_END; N <<= 1)
     {
         uint64_t rt_mn = 0, rt_mt = 0, rt_tt = 0, rt_cb = 0, rt_cp = 0;
 
