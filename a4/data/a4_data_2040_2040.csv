@@ -1,0 +1,2 @@
+N,Naive (ns),Tiled (ns),Transposed (ns),Cublas (ns),CPU 16 Thds OMP (ns)
+2040,97166857,72182478,69472594,73177489,0
