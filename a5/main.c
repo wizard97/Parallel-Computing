@@ -2,16 +2,14 @@
 //mpicc -std=gnu99 -O3 -Wall -fopenmp main.c -lm -o a5
 
 /*** RUNNING ******/
-// -np can be any even number!
-// Node-Node
-//mpirun -mca plm_rsh_no_tree_spawn 1 --map-by node -bind-to core -host en-openmpi00,en-openmpi02 -np 2 ./p1
-
-// Socket-Socket
-//mpirun -mca plm_rsh_no_tree_spawn 1 --map-by socket -bind-to core -np 2 ./p1
-
-// Core-Core
-//mpirun -mca plm_rsh_no_tree_spawn 1 --map-by socket -bind-to core -np 2 ./p1
-
+/*
+mpirun -np <N> -use-hwthread-cpus --map-by node:PE=<X> a5 <X> <r> <k>
+Where:
+N = number of nodes (processes)
+X = number of omp threads per process
+r = is the radius of the hemisphere
+k = 2^k number of steps when integrating
+*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -25,11 +23,10 @@
 
 #define BILLION 1000000000
 
-
 /**** MACROS TO PLAY WITH ******/
-#define NUM_RUNS (1<<10)
-#define N 10000
-#define R ((double)1.0)
+#define DEFAULT_NUM_OMP_THREADS 4
+#define DEFAULT_N (1<<16)
+#define DEFAULT_R ((double)1.0)
 /******************************/
 
 
@@ -48,14 +45,31 @@ double hemisphere(double x, double y, void *args);
 
 uint64_t get_dt(struct timespec *start, struct timespec *end);
 
-static int myrank, nprocs;
+static int myrank, nprocs, nthreads;
 
 int main(int argc, char **argv)
 {
-    MPI_Init(&argc, &argv);
+    nthreads = DEFAULT_NUM_OMP_THREADS;
+    if (argc >= 2)
+        nthreads = atof(argv[1]);
+
+    double r = DEFAULT_R;
+    if (argc >= 3)
+        r = atof(argv[2]);
+
+    uint32_t n = DEFAULT_N;
+    if (argc >= 4)
+        n = 1 << atoi(argv[3]);
+
+    int provided;
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
     MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
     MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
+    omp_set_num_threads(nthreads);
+    omp_set_dynamic(0); //disable dynamic
 
+
+    DEBUGR0("OMP_THREADS: %d, r=%f, n=%u\n", nthreads, r, n);
 
     int name_len;
     char processor_name[MPI_MAX_PROCESSOR_NAME];
@@ -67,29 +81,30 @@ int main(int argc, char **argv)
     clock_gettime(CLOCK_MONOTONIC, &start);
 
     // divide and conquer!
-    double r = R;
     double dx = (2*r)/nprocs;
     // integrate from X: [-R + rank*dx, -R + (rank+1)*dx], Y: [-R, R]
     double p_res, res;
-    p_res = riemann_rectangle(-r + myrank*dx, -r + (myrank+1)*dx, -r, r, N/nprocs, N, &hemisphere, &r);
+    p_res = riemann_rectangle(-r + myrank*dx, -r + (myrank+1)*dx, -r, r, n/nprocs, n, &hemisphere, &r);
 
     // might as well send answer to everysone
     MPI_Allreduce(&p_res, &res, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 
     clock_gettime(CLOCK_MONOTONIC, &end);
 
+    uint64_t rt = get_dt(&start, &end);
+
     FILE *fd;
     if (ROOT()) {
-    	char name[20];
-    	snprintf(name, sizeof(name), "%d_riemann.csv", nprocs);
-    	fd = fopen(name, "w");
-    	fprintf(fd, "Length,ns/byte\n");
+        char name[20];
+        snprintf(name, sizeof(name), "%d_riemann.csv", nprocs);
+        fd = fopen(name, "w");
+        fprintf(fd, "Num Nodes,N,Runtime ns\n");
+        fprintf(fd, "%u,%u,%lu\n", nprocs, n, rt);
 
     }
 
-    uint64_t rt = rt = get_dt(&start, &end);
-
-    DEBUGR0("Results: %f in %lu us\n", res, rt/1000);
+    double exs = (2*M_PI*(r*r*r))/3;
+    DEBUGR0("Results: %f (error: %.2E) in %lu ms\n", res, fabs(res-exs), rt/1000000);
 
 
     //Done!
