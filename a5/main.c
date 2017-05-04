@@ -1,5 +1,5 @@
 /**** COMPILING ***/
-//mpicc -O3 -Wall -std=gnu99 daw268_hw3_part_1.c -o p1
+//mpicc -std=gnu99 -O3 -Wall -fopenmp main.c -lm -o a5
 
 /*** RUNNING ******/
 // -np can be any even number!
@@ -18,14 +18,18 @@
 #include <stdbool.h>
 #include <math.h>
 #include <mpi.h>
+#include <time.h>
 #include <omp.h>
 #include <time.h>
 #include <unistd.h>
 
+#define BILLION 1000000000
+
 
 /**** MACROS TO PLAY WITH ******/
 #define NUM_RUNS (1<<10)
-#define N 1024
+#define N 10000
+#define R ((double)1.0)
 /******************************/
 
 
@@ -42,11 +46,12 @@ double riemann_rectangle(double xstart, double xend, double ystart, double yend,
 
 double hemisphere(double x, double y, void *args);
 
+uint64_t get_dt(struct timespec *start, struct timespec *end);
+
 static int myrank, nprocs;
 
 int main(int argc, char **argv)
 {
-    MPI_Comm cart;
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
     MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
@@ -58,6 +63,21 @@ int main(int argc, char **argv)
     DEBUG("Node '%s' (rank %d) online and reporting for duty!", processor_name, myrank);
 
 
+    struct timespec start, end; //timestamps
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
+    // divide and conquer!
+    double r = R;
+    double dx = (2*r)/nprocs;
+    // integrate from X: [-R + rank*dx, -R + (rank+1)*dx], Y: [-R, R]
+    double p_res, res;
+    p_res = riemann_rectangle(-r + myrank*dx, -r + (myrank+1)*dx, -r, r, N/nprocs, N, &hemisphere, &r);
+
+    // might as well send answer to everysone
+    MPI_Allreduce(&p_res, &res, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+
+    clock_gettime(CLOCK_MONOTONIC, &end);
+
     FILE *fd;
     if (ROOT()) {
     	char name[20];
@@ -67,16 +87,10 @@ int main(int argc, char **argv)
 
     }
 
+    uint64_t rt = rt = get_dt(&start, &end);
 
-    double start=MPI_Wtime(); /*start timer*/
+    DEBUGR0("Results: %f in %lu us\n", res, rt/1000);
 
-
-	//get data
-    float r = 1;
-	double res = riemann_rectangle(-1, 1, -1, 1, 100, 100, &hemisphere, &r);
-	//MPI_Reduce(&avg_runtime, &res, 1,MPI_DOUBLE, MPI_SUM, 0,MPI_COMM_WORLD);
-
-    printf("Res: %f\n", res);
 
     //Done!
     if (ROOT())
@@ -94,22 +108,27 @@ double riemann_rectangle(double xstart, double xend, double ystart, double yend,
     if (!steps_x || !steps_y)
         return 0;
 
+
     const double dx = (xend - xstart)/(double)steps_x;
     const double dy = (yend - ystart)/(double)steps_y;
 
     double res = 0;
 
+    # pragma omp parallel for schedule(guided) reduction(+: res)
     for (uint32_t i=0; i < steps_x; i++)
     {
         for (uint32_t j=0; j < steps_y; j++)
         {
+            // always recalculate from index i and j to avoid percision errors
             double x = xstart + i*dx;
             double y = ystart + j*dx;
 
-            double f_avg = (f(x,y,args) + f(x+dx,y,args) + f(x,y+dy,args) + f(x+dx,y+dy,args))/4;
-            res += f_avg*dx*dy;
+            res += f(x,y,args) + f(x+dx,y,args) + f(x,y+dy,args) + f(x+dx,y+dy,args);
         }
     }
+
+    // do final division once at end to minimize errors
+    res *= (dx*dy)/4;
 
     return res;
 }
@@ -117,10 +136,19 @@ double riemann_rectangle(double xstart, double xend, double ystart, double yend,
 
 double hemisphere(double x, double y, void *args)
 {
-    const double r = *(double*)args;
+    const double r = *((double*)args);
 
-    if (x*x + y*y <= r*r)
+    if (x*x + y*y < r*r)
         return sqrt(r*r - x*x - y*y);
 
+
     return 0;
+}
+
+
+
+
+uint64_t get_dt(struct timespec *start, struct timespec *end)
+{
+    return BILLION*(end->tv_sec - start->tv_sec) + (end->tv_nsec - start->tv_nsec);
 }
