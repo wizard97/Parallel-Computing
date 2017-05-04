@@ -1,9 +1,9 @@
 /**** COMPILING ***/
-//mpicc -std=gnu99 -O3 -Wall -fopenmp main.c -lm -o a5
+//mpicc -std=gnu99 -O3 -Wall -fopenmp daw268_hw5.c -lm -o daw268_hw5
 
 /*** RUNNING ******/
 /*
-mpirun -np <N> -use-hwthread-cpus --map-by node:PE=<X> a5 <X> <r> <k>
+mpirun -mca plm_rsh_no_tree_spawn 1 -np <N> -use-hwthread-cpus -hostfile hostfile --map-by node:PE=<X> daw268_hw5 <X> <r> <k>
 Where:
 N = number of nodes (processes)
 X = number of omp threads per process
@@ -20,6 +20,17 @@ k = 2^k number of steps when integrating
 #include <omp.h>
 #include <time.h>
 #include <unistd.h>
+
+// colors
+#define KNRM  "\x1B[0m"
+#define KRED  "\x1B[31m"
+#define KGRN  "\x1B[32m"
+#define KYEL  "\x1B[33m"
+#define KBLU  "\x1B[34m"
+#define KMAG  "\x1B[35m"
+#define KCYN  "\x1B[36m"
+#define KWHT  "\x1B[37m"
+#define RESET KNRM
 
 #define BILLION 1000000000
 
@@ -69,7 +80,7 @@ int main(int argc, char **argv)
     omp_set_dynamic(0); //disable dynamic
 
 
-    DEBUGR0("OMP_THREADS: %d, r=%f, n=%u\n", nthreads, r, n);
+    DEBUGR0(KGRN "OMP_THREADS: %d, r=%f, n=%u\n"KNRM, nthreads, r, n);
 
     int name_len;
     char processor_name[MPI_MAX_PROCESSOR_NAME];
@@ -86,8 +97,8 @@ int main(int argc, char **argv)
     double p_res, res;
     p_res = riemann_rectangle(-r + myrank*dx, -r + (myrank+1)*dx, -r, r, n/nprocs, n, &hemisphere, &r);
 
-    // might as well send answer to everysone
-    MPI_Allreduce(&p_res, &res, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    // Reduce answer by summing all partial results, send to root
+    MPI_Reduce(&p_res, &res, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
     clock_gettime(CLOCK_MONOTONIC, &end);
 
@@ -104,7 +115,7 @@ int main(int argc, char **argv)
     }
 
     double exs = (2*M_PI*(r*r*r))/3;
-    DEBUGR0("Results: %f (error: %.2E) in %lu ms\n", res, fabs(res-exs), rt/1000000);
+    DEBUGR0(KGRN "Results: %f " KRED "(error: %.2E)" RESET " in %lu ms\n", res, fabs(res-exs), rt/1000000);
 
 
     //Done!
