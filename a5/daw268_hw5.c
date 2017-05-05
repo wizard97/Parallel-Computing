@@ -3,12 +3,17 @@
 
 /*** RUNNING ******/
 /*
-mpirun -mca plm_rsh_no_tree_spawn 1 -np <N> -use-hwthread-cpus -hostfile hostfile --map-by node:PE=<X> daw268_hw5 <X> <r> <k>
+mpirun -mca plm_rsh_no_tree_spawn 1 -np <N> -use-hwthread-cpus -hostfile hostfile --map-by node:PE=<X> daw268_hw5 <X> <r> <k_start> <k_end>
 Where:
 N = number of nodes (processes)
 X = number of omp threads per process
 r = is the radius of the hemisphere
-k = 2^k number of steps when integrating
+k_start = Starting number of steps (2^k_start) while integrating
+k_end = Ending number of steps (2^k_end) while integrating
+
+Result:
+Output saved in .csv file in data folder
+<N>nodes_<X>threads_riemann.csv
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,8 +41,10 @@ k = 2^k number of steps when integrating
 
 /**** MACROS TO PLAY WITH ******/
 #define DEFAULT_NUM_OMP_THREADS 4
-#define DEFAULT_N (1<<16)
 #define DEFAULT_R ((double)1.0)
+#define DEFAULT_K_START 8
+#define DEFAULT_K_END 18
+#define NUM_RUNS 3
 /******************************/
 
 
@@ -68,9 +75,14 @@ int main(int argc, char **argv)
     if (argc >= 3)
         r = atof(argv[2]);
 
-    uint32_t n = DEFAULT_N;
-    if (argc >= 4)
-        n = 1 << atoi(argv[3]);
+    uint32_t k_start = DEFAULT_K_START;
+    uint32_t k_end = DEFAULT_K_END;
+
+    if (argc >= 5) {
+        k_start = atoi(argv[3]);
+        k_end = atoi(argv[4]);
+    }
+
 
     int provided;
     MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
@@ -80,7 +92,17 @@ int main(int argc, char **argv)
     omp_set_dynamic(0); //disable dynamic
 
 
-    DEBUGR0(KGRN "OMP_THREADS: %d, r=%f, n=%u\n"KNRM, nthreads, r, n);
+    DEBUGR0(KGRN "OMP Thds/Proc=%d, r=%f, k=%u-%u\n"KNRM, nthreads, r, k_start, k_end);
+
+    FILE *fd;
+    if (ROOT()) {
+        char name[50];
+        snprintf(name, sizeof(name), "data/%dnodes_%dthreads_riemann.csv", nprocs, nthreads);
+        fd = fopen(name, "w");
+        fprintf(fd, "k,Error,Runtime ns\n");
+        //fprintf(fd, "%u,%u,%lu\n", nprocs, n, rt);
+
+    }
 
     int name_len;
     char processor_name[MPI_MAX_PROCESSOR_NAME];
@@ -89,38 +111,48 @@ int main(int argc, char **argv)
 
 
     struct timespec start, end; //timestamps
-    clock_gettime(CLOCK_MONOTONIC, &start);
+    uint64_t rt = 0;
+
 
     // divide and conquer!
     double dx = (2*r)/nprocs;
     // integrate from X: [-R + rank*dx, -R + (rank+1)*dx], Y: [-R, R]
     double p_res, res;
-    p_res = riemann_rectangle(-r + myrank*dx, -r + (myrank+1)*dx, -r, r, n/nprocs, n, &hemisphere, &r);
 
-    // Reduce answer by summing all partial results, send to root
-    MPI_Reduce(&p_res, &res, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
-    clock_gettime(CLOCK_MONOTONIC, &end);
+    for (uint32_t k = k_start; k <= k_end; k++)
+    {
+        uint32_t n = 1<<k;
+        for (int i=0; i < NUM_RUNS; i++)
+        {
+            DEBUGR0(KBLU "Starting run k=%u (%d of %d)\n" RESET, k, i+1, NUM_RUNS);
+            clock_gettime(CLOCK_MONOTONIC, &start);
 
-    uint64_t rt = get_dt(&start, &end);
+            p_res = riemann_rectangle(-r + myrank*dx, -r + (myrank+1)*dx, -r, r, n/nprocs, n, &hemisphere, &r);
 
-    FILE *fd;
-    if (ROOT()) {
-        char name[20];
-        snprintf(name, sizeof(name), "%d_riemann.csv", nprocs);
-        fd = fopen(name, "w");
-        fprintf(fd, "Num Nodes,N,Runtime ns\n");
-        fprintf(fd, "%u,%u,%lu\n", nprocs, n, rt);
+            // Reduce answer by summing all partial results, send to root
+            MPI_Reduce(&p_res, &res, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
+            clock_gettime(CLOCK_MONOTONIC, &end);
+
+            rt += get_dt(&start, &end);
+        }
+
+        rt /= NUM_RUNS;
+
+        double exs = (2*M_PI*(r*r*r))/3;
+        DEBUGR0(KGRN "Results k=%u: %f " KRED "(error: %.2E)" RESET " in %lu ms (avg)\n", k, res, fabs(res-exs), rt/1000000);
+
+        if (ROOT())
+            fprintf(fd, "%u,%.2E,%lu\n", k, fabs(res-exs), rt);
     }
-
-    double exs = (2*M_PI*(r*r*r))/3;
-    DEBUGR0(KGRN "Results: %f " KRED "(error: %.2E)" RESET " in %lu ms\n", res, fabs(res-exs), rt/1000000);
-
 
     //Done!
     if (ROOT())
 	   fclose(fd);
+
+    DEBUGR0(KGRN "Completed test!"KNRM);
+    DEBUGR0(KGRN"OMP Thds/Proc=%d, r=%f, k=%u-%u\n"KNRM, nthreads, r, k_start, k_end);
 
     MPI_Finalize();
 }
